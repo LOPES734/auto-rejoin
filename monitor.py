@@ -1218,7 +1218,7 @@ class Monitor:
         try:
             was_running = False
             running_since: Optional[float] = None
-            if self._launch_on_start and self._is_running() is False:
+            if not self._stop.is_set() and self._launch_on_start and self._is_running() is False:
                 self._quiet_recovered = True
                 outcome = self._rejoin()
                 self._quiet_recovered = False
@@ -1387,13 +1387,23 @@ class Monitor:
                     return "stopped"
 
     def _launch(self, attempt: int) -> bool:
+        # A paragem pode ser pedida enquanto o monitor espera ou antes do launcher.
+        # Nunca iniciar um novo pedido depois de o evento de paragem estar ativo.
+        if self._stop.is_set():
+            return False
         cfg = self.config
         if self._launcher is not None:
             try:
+                if self._stop.is_set():
+                    return False
                 method = self._launcher() or "ram"
             except Exception as exc:
+                if self._stop.is_set():
+                    return False
                 self.last_error = f"Não foi possível abrir o Roblox: {exc}"
                 self._log.error(self.last_error)
+                return False
+            if self._stop.is_set():
                 return False
             self.launch_count += 1
             self._last_method = method
@@ -1402,6 +1412,8 @@ class Monitor:
         urls = build_urls(cfg.place_id_int)
         problems: List[str] = []
         for method in methods_for_attempt(cfg.launch_method, attempt, bool(cfg.roblox_path)):
+            if self._stop.is_set():
+                return False
             try:
                 if method == "exe":
                     if not cfg.roblox_path:
